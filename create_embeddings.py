@@ -18,6 +18,9 @@ def get_df_embeddings(df: pd.DataFrame):
 
     model = SentenceTransformer("distiluse-base-multilingual-cased-v2")
 
+    # Ajouter une colonne pour les embeddings
+    df[EMBEDDING_COLUMN] = None
+
     # Suivi de la progression avec tqdm
     with tqdm(total=len(df), desc="Enbedding en cours", unit="embedding") as pbar:
         for index, row in df.iterrows():
