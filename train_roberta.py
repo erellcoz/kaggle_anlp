@@ -3,9 +3,12 @@ from transformers import XLMRobertaTokenizer, XLMRobertaForSequenceClassificatio
 from torch.utils.data import Dataset, DataLoader
 import torch
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from tqdm import tqdm
+import json
 
 class TextDataset(Dataset):
-    def __init__(self, texts, labels, tokenizer, max_len):
+    def __init__(self, texts, labels=None, tokenizer=None, max_len=128):
         self.texts = texts
         self.labels = labels
         self.tokenizer = tokenizer
@@ -16,7 +19,6 @@ class TextDataset(Dataset):
 
     def __getitem__(self, idx):
         text = self.texts[idx]
-        label = self.labels[idx]
         encoding = self.tokenizer.encode_plus(
             text,
             add_special_tokens=True,
@@ -27,26 +29,48 @@ class TextDataset(Dataset):
             return_attention_mask=True,
             return_tensors='pt',
         )
-        return {
+        item = {
             'text': text,
             'input_ids': encoding['input_ids'].flatten(),
             'attention_mask': encoding['attention_mask'].flatten(),
-            'labels': torch.tensor(label, dtype=torch.long)
         }
+        if self.labels is not None:
+            item['labels'] = torch.tensor(self.labels[idx], dtype=torch.long)
+        return item
 
 def load_data(filepath):
     df = pd.read_csv(filepath)
     texts = df['Text'].tolist()
-    labels = df['Label'].tolist()
-    unique_labels = list(set(labels))
-    label_to_id = {label: idx for idx, label in enumerate(unique_labels)}
-    labels = [label_to_id[label] for label in labels]
+    labels = df['Label'].tolist() if 'Label' in df.columns else None
+    unique_labels = list(set(labels)) if labels is not None else []
+    label_to_id = {label: idx for idx, label in enumerate(unique_labels)} if labels is not None else {}
+    if labels is not None:
+        labels = [label_to_id[label] for label in labels]
     return texts, labels, label_to_id
 
-def main():
+def compute_metrics(p):
+    preds = p.predictions.argmax(-1)
+    precision, recall, f1_weighted, _ = precision_recall_fscore_support(p.label_ids, preds, average='weighted', zero_division=0)
+    precision_unweighted, recall_unweighted , f1_unweighted, _ = precision_recall_fscore_support(p.label_ids, preds, average='macro', zero_division=0)
+    accuracy = accuracy_score(p.label_ids, preds)
+    return {
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1_weighted": f1_weighted,
+        "precision_unweighted": precision_unweighted,
+        "recall_unweighted": recall_unweighted,
+        "f1_unweighted": f1_unweighted,
+    }
+
+def train_model():
     # Load data
     filepath = "data/train_submission.csv"
     texts, labels, label_to_id = load_data(filepath)
+
+    # Save label_to_id mapping
+    with open('results/label_to_id.json', 'w') as f:
+        json.dump(label_to_id, f)
 
     # Split data into training and test sets
     train_texts, test_texts, train_labels, test_labels = train_test_split(texts, labels, test_size=0.2, random_state=42)
@@ -62,17 +86,20 @@ def main():
     # Define training arguments
     training_args = TrainingArguments(
         output_dir='./results',
-        num_train_epochs=3,
+        num_train_epochs=10,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=16,
         warmup_steps=500,
         weight_decay=0.01,
         logging_dir='./logs',
-        logging_steps=10,
+        logging_steps=1000,
         evaluation_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
-        fp16=True,  # Enable mixed precision training
+        fp16=True,
+        learning_rate=5e-5,
+        metric_for_best_model="f1_weighted",
+        greater_is_better=True,
     )
 
     # Initialize Trainer
@@ -81,10 +108,74 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=test_dataset,
+        compute_metrics=compute_metrics,
     )
 
     # Train model
     trainer.train()
+
+    # Save the best model
+    model_path = "results/best_model.pth"
+    torch.save(model.state_dict(), model_path)
+
+def load_model(model_path, num_labels):
+    tokenizer = XLMRobertaTokenizer.from_pretrained('xlm-roberta-base')
+    model = XLMRobertaForSequenceClassification.from_pretrained('xlm-roberta-base', num_labels=num_labels)
+    model.load_state_dict(torch.load(model_path))
+    return tokenizer, model
+
+def predict(model, tokenizer, texts, max_len=128, batch_size=16, device='cpu'):
+    dataset = TextDataset(texts, tokenizer=tokenizer, max_len=max_len)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size)
+
+    model.eval()
+    predictions = []
+
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc="Predicting"):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+            logits = outputs.logits
+            preds = torch.argmax(logits, dim=1)
+            predictions.extend(preds.cpu().numpy())
+
+    return predictions
+
+def inference():
+    # Check if GPU is available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Load test data
+    test_filepath = "data/test_without_labels.csv"
+    test_df = pd.read_csv(test_filepath)
+    test_texts = test_df['Text'].tolist()
+
+    # Load model and tokenizer
+    model_path = './results/best_model.pth'
+    with open('results/label_to_id.json', 'r') as f:
+        label_to_id = json.load(f)
+    id_to_label = {v: k for k, v in label_to_id.items()}
+    tokenizer, model = load_model(model_path, num_labels=len(label_to_id))
+    model.to(device)  # Move model to GPU if available
+
+    # Make predictions
+    predictions = predict(model, tokenizer, test_texts, device=device)
+
+    # Map predictions to labels
+    predicted_labels = [id_to_label[pred] for pred in predictions]
+
+    # Add predictions to DataFrame
+    test_df['Prediction'] = predicted_labels
+
+    # Save predictions to a CSV file
+    output_filepath = 'data/test_predictions.csv'
+    test_df.to_csv(output_filepath, index=False)
+
+def main():
+    # os.makedirs('results', exist_ok=True)
+    train_model()
+    inference()
 
 if __name__ == "__main__":
     main()
