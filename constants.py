@@ -34,3 +34,19 @@ ALPHABETS = {
 }
 TINY_ALPHABETS = ["Hiragana", "Katakana", "Gujarati", "Korean", "Thai"]
 SMALL_ALPHABETS = ["Hebrew", "Greek", "Georgian"]
+
+ALPHABETS_FT = {
+    "Latin": [(0x0041, 0x005A), (0x0061, 0x007A)],
+    "Cyrillique": [(0x0400, 0x04FF)],
+    "Arabe": [(0x0600, 0x06FF)],
+    "Hébreu": [(0x0590, 0x05FF)],
+    "Chinois": [(0x4E00, 0x9FFF)],
+    "Hiragana": [(0x3040, 0x309F)],
+    "Katakana": [(0x30A0, 0x30FF)],
+    "Coréen": [(0xAC00, 0xD7AF)],
+    "Grec": [(0x0370, 0x03FF)],
+    "Gujarati": [(0x0A80, 0x0AFF)],
+    "Devanagari": [(0x0900, 0x097F)],
+    "Thaï": [(0x0E00, 0x0E7F)],
+    "Géorgien": [(0x10A0, 0x10FF)],
+}
