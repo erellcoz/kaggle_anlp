@@ -147,9 +147,18 @@ def inference():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load test data
-    test_filepath = "data/test_without_labels.csv"
+    test_filepath = "data/train_submission.csv"
     test_df = pd.read_csv(test_filepath)
     test_texts = test_df['Text'].tolist()
+    
+    # Load data
+    filepath = "data/train_submission.csv"
+    df = pd.read_csv(filepath)
+    texts = df['Text'].tolist()
+    labels = df['Label'].tolist()
+    ids = df['ID'].tolist()
+    # Split data into training and test sets
+    train_texts, test_texts, train_labels, test_labels,train_ids,test_ids = train_test_split(texts, labels,ids, test_size=0.2, random_state=42)
 
     # Load model and tokenizer
     model_path = './results/best_model.pth'
@@ -159,22 +168,27 @@ def inference():
     tokenizer, model = load_model(model_path, num_labels=len(label_to_id))
     model.to(device)  # Move model to GPU if available
 
-    # Make predictions
-    predictions = predict(model, tokenizer, test_texts, device=device)
+    predictions_test = predict(model, tokenizer, test_texts, device=device)
+    predictions_train = predict(model, tokenizer, train_texts, device=device)
 
-    # Map predictions to labels
-    predicted_labels = [id_to_label[pred] for pred in predictions]
+    predicted_labels_test = [id_to_label[pred] for pred in predictions_test]
+    predicted_labels_train = [id_to_label[pred] for pred in predictions_train]
+    
+    usage_test = ["Public" for i in range(len(test_texts))]
+    usage_train = ["Public" for i in range(len(train_texts))]
+    
+    type_test = ["Test" for i in range(len(test_texts))]
+    type_train = ["Train" for i in range(len(train_texts))]
 
     # Add predictions to DataFrame
-    test_df['Prediction'] = predicted_labels
-
-    # Save predictions to a CSV file
-    output_filepath = 'data/test_predictions.csv'
-    test_df.to_csv(output_filepath, index=False)
+    df_test = pd.DataFrame({'ID': test_ids, 'Usage': usage_test, 'Text': test_texts, 'Label': test_labels, 'PredictedLabel': predicted_labels_test, 'Type': type_test})
+    df_train = pd.DataFrame({'ID': train_ids, 'Usage': usage_train, 'Text': train_texts, 'Label': train_labels, 'PredictedLabel': predicted_labels_train, 'Type': type_train})
+    final_df = pd.concat([df_test, df_train], ignore_index=True)
+    final_df.to_csv('data/train_predictions.csv', index=False)
 
 def main():
     # os.makedirs('results', exist_ok=True)
-    train_model()
+    # train_model()
     inference()
 
 if __name__ == "__main__":
